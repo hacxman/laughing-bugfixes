@@ -1,0 +1,145 @@
+#!/usr/bin/python
+import sys
+import os
+
+MEMTOP = 0xffff
+
+class Cpu(object):
+  def __init__(self, ramfile):
+    self.regs = [0] * 8
+    self.pc = 0
+    self.shadow_pc = 0
+    self.ticks = 0
+    with open(ramfile) as fin:
+      m = fin.read()
+      l = len(m)
+      self.memory = bytearray(m + '\0' * (2 ** 16 - l))
+
+    self.zero = False
+    self.stores = []
+
+  def log_store(self, r, addr, val):
+    self.stores.append([r, addr, val])
+
+
+  def _nop(self, c, r0):
+    self.pc += 1
+
+  def _mov1(self, c, r0):
+    self.pc += 1
+    i = self.memory[self.pc]
+    r1 = (i & 0b01110000) >> 4
+
+    if c:
+      self.regs[r0] = self.regs[r1]
+    self.pc += 1
+
+  def _mov2(self, c, r0):
+    self.pc += 1
+    i = self.memory[self.pc]
+
+    if c:
+      self.regs[r0] = i
+    self.pc += 1
+
+  def _ld(self, c, r0):
+    pc = self.pc + 1
+    a = self.memory[pc] + (self.memory[pc+1] << 8) + (self.memory[pc+2] << 16)
+
+    if c:
+      # - here is access to mmaped regs
+      if a == 0xfffffd:
+        self.regs[r0] = self.pc & 0xff
+      elif a == 0xfffffe:
+        self.regs[r0] = (self.pc & 0xff00) >> 8
+      elif a == 0xffffff:
+        self.regs[r0] = (self.pc & 0xff0000) >> 16
+      else:
+        self.regs[r0] = self.memory[a & MEMTOP]
+    self.pc += 4
+
+  def _st(self, c, r0):
+    pc = self.pc + 1
+    a = self.memory[pc] + (self.memory[pc+1] << 8) + (self.memory[pc+2] << 16)
+    #print "_st", c, r0, a
+
+    if c:
+      # - here be access to mmaped regs
+      if a == 0xfffffc:
+        # shadow PC commit
+        #print 'pc commit', self.pc, self.shadow_pc
+        self.pc = self.shadow_pc
+        return
+      elif a == 0xfffffd:
+        self.shadow_pc = (self.shadow_pc & 0xffff00) | self.regs[r0]
+      elif a == 0xfffffe:
+        self.shadow_pc = (self.shadow_pc & 0xff00ff) | (self.regs[r0] << 8)
+      elif a == 0xffffff:
+        self.shadow_pc = (self.shadow_pc & 0x00ffff) | (self.regs[r0] << 16)
+      else:
+        self.memory[a & MEMTOP] = self.regs[r0]
+        self.log_store(r0, a, self.regs[r0])
+    self.pc += 4
+
+  def _add(self, c, r0):
+    self.pc += 1
+    i = self.memory[self.pc]
+    r1 = (i & 0b01110000) >> 4
+    r2 = (i & 0b00000111)
+
+    if c:
+      self.regs[r0] = min(max(self.regs[r1] + self.regs[r2], 0), 255)
+    self.pc += 1
+
+  def _sub(self, c, r0):
+    self.pc += 1
+    i = self.memory[self.pc]
+    r1 = (i & 0b01110000) >> 4
+    r2 = (i & 0b00000111)
+
+    if c:
+      self.regs[r0] = min(max(self.regs[r1] - self.regs[r2], 0), 255)
+      #print 'sub', self.regs[r0]
+      if self.regs[r0] == 0:
+        #print 'SETTING ZERO'
+        self.zero = True
+      else:
+        #print 'UNSETTING ZERO'
+        self.zero = False
+    self.pc += 1
+
+  def tick(self):
+    self.pc = self.pc & MEMTOP
+    self.ticks += 1
+
+    i = self.memory[self.pc]
+    opcode = i & 0b1111
+    if not (i & 0b10000000):
+      condit = True
+    else:
+      #print 'CONDITIONED', self.zero
+      condit = not self.zero
+    r0 = (i & 0b01110000) >> 4
+
+    ops = {0: self._nop, 0b0010: self._mov1, 0b1110: self._mov2, 0b0011: self._ld,
+       0b0100: self._st, 0b1001: self._add, 0b1010: self._sub}
+
+    try:
+#      print hex(self.pc), bin(i), bin(self.memory[self.pc+1]), bin(opcode), self.regs, ops[opcode].__name__, (condit, r0)
+      ops[opcode](condit, r0)
+    except Exception as e:
+      offending = filter(lambda (_x,a,_y): a == self.pc, self.stores)
+      print "CPU caught exception - unknown OPcode", bin(opcode), '@', hex(self.pc), hex(self.ticks), "due to %i offending memory op" %(len(offending)) if not offending == [] else ''
+#      print "memory stores:"
+#      print self.stores
+#      offending = filter(lambda (_x,a,_y): a == self.pc, self.stores)
+#      if not offending == []:
+#        print 'offending:', offending
+      self.pc += 1
+
+import time
+if __name__ == "__main__":
+  cpu = Cpu("img.img")
+  while True:
+    cpu.tick()
+    time.sleep(0.0001)

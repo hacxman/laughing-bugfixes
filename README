@@ -1,0 +1,7 @@
+Emulator accepts bitcode produced by freezing-adventure in file called img.img.
+
+Memory size is 64K, max is 16M.
+
+to run: $ ./emu
+
+It's slow, buggy and incomplete. Might kill nearest unicorn.

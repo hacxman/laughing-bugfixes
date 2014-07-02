@@ -81,6 +81,52 @@ class Cpu(object):
         self.log_store(r0, a, self.regs[r0])
     self.pc += 4
 
+  def _ld2(self, c, r0):
+    self.pc += 1
+    i = self.memory[self.pc]
+    r1 = (i & 0b01110000) >> 4
+    r2 = (i & 0b00000111)
+
+    a = self.memory[0x000044] << 16 + (self.regs[r1]) + (self.memory[r2] << 8)
+
+    if c:
+      # - here is access to mmaped regs
+      if a == 0xfffffd:
+        self.regs[r0] = self.pc & 0xff
+      elif a == 0xfffffe:
+        self.regs[r0] = (self.pc & 0xff00) >> 8
+      elif a == 0xffffff:
+        self.regs[r0] = (self.pc & 0xff0000) >> 16
+      else:
+        self.regs[r0] = self.memory[a & MEMTOP]
+    self.pc += 1
+
+  def _st2(self, c, r0):
+    self.pc += 1
+    i = self.memory[self.pc]
+    r1 = (i & 0b01110000) >> 4
+    r2 = (i & 0b00000111)
+
+    a = self.memory[0x000044] << 16 + (self.regs[r1]) + (self.memory[r2] << 8)
+
+    if c:
+      # - here be access to mmaped regs
+      if a == 0xfffffc:
+        # shadow PC commit
+        #print 'pc commit', self.pc, self.shadow_pc
+        self.pc = self.shadow_pc
+        return
+      elif a == 0xfffffd:
+        self.shadow_pc = (self.shadow_pc & 0xffff00) | self.regs[r0]
+      elif a == 0xfffffe:
+        self.shadow_pc = (self.shadow_pc & 0xff00ff) | (self.regs[r0] << 8)
+      elif a == 0xffffff:
+        self.shadow_pc = (self.shadow_pc & 0x00ffff) | (self.regs[r0] << 16)
+      else:
+        self.memory[a & MEMTOP] = self.regs[r0]
+        self.log_store(r0, a, self.regs[r0])
+    self.pc += 1
+
   def _add(self, c, r0):
     self.pc += 1
     i = self.memory[self.pc]
@@ -122,7 +168,8 @@ class Cpu(object):
     r0 = (i & 0b01110000) >> 4
 
     ops = {0: self._nop, 0b0010: self._mov1, 0b1110: self._mov2, 0b0011: self._ld,
-       0b0100: self._st, 0b1001: self._add, 0b1010: self._sub}
+       0b0100: self._st, 0b1001: self._add, 0b1010: self._sub, 0b1011: self._ld2,
+       0b1100: self._st2}
 
     try:
 #      print hex(self.pc), bin(i), bin(self.memory[self.pc+1]), bin(opcode), self.regs, ops[opcode].__name__, (condit, r0)
